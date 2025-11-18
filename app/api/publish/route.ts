@@ -22,6 +22,10 @@ import {
 } from '@/lib/adapters';
 import { getDatabaseService } from '@/lib/appwrite/database';
 import { hashContent } from '@/lib/utils';
+import { applyRateLimit } from '@/lib/security/rate-limiter';
+import { publishRequestSchema } from '@/lib/validation/schemas';
+import { PlatformErrorHandler } from '@/lib/api/platform-error-handler';
+import { APIError, ErrorCategory } from '@/lib/api/error-handler';
 
 /**
  * Publish request body
@@ -48,14 +52,42 @@ interface PublishResponse {
  */
 export async function POST(request: NextRequest) {
   try {
+    // Apply rate limiting (5 requests per minute)
+    const rateLimitResponse = applyRateLimit(request, 'publish');
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
     // Parse request body
     const body: PublishRequest = await request.json();
+
+    // Validate request with Zod schema
+    const validation = publishRequestSchema.safeParse({
+      articleId: body.articleId,
+      platforms: body.platforms,
+    });
+
+    if (!validation.success) {
+      const errors = validation.error.errors.map((err) => ({
+        field: err.path.join('.'),
+        message: err.message,
+      }));
+
+      return NextResponse.json(
+        {
+          error: 'Validation failed',
+          details: errors,
+        },
+        { status: 400 }
+      );
+    }
+
     const { articleId, userId, platforms, useVariants = true } = body;
 
-    // Validate inputs
-    if (!articleId || !userId || !platforms || platforms.length === 0) {
+    // Validate userId
+    if (!userId) {
       return NextResponse.json(
-        { error: 'Missing required fields: articleId, userId, platforms' },
+        { error: 'Missing required field: userId' },
         { status: 400 }
       );
     }
@@ -118,18 +150,35 @@ export async function POST(request: NextRequest) {
       } catch (error) {
         console.error(`Failed to publish to ${platform}:`, error);
 
+        // Handle platform-specific errors
+        let errorMessage = 'Unknown error';
+        let userMessage = 'An error occurred while publishing';
+
+        if (error instanceof APIError) {
+          errorMessage = error.message;
+          userMessage = error.userMessage;
+        } else if (error instanceof Error) {
+          errorMessage = error.message;
+          userMessage = error.message;
+        }
+
         results.push({
           platform,
           success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
+          error: userMessage,
         });
 
-        // Save failure record
+        // Save failure record with retry count
+        const existingPublications = await db.getPublications(articleId);
+        const existingPublication = existingPublications.find(
+          (p) => p.platform === platform
+        );
+
         const publication: Publication = {
           platform,
           status: PlatformPublishStatus.FAILED,
-          error: error instanceof Error ? error.message : 'Unknown error',
-          retryCount: 0,
+          error: errorMessage,
+          retryCount: (existingPublication?.retryCount || 0) + 1,
         };
 
         await db.upsertPublication(articleId, publication);
@@ -163,9 +212,22 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Publish error:', error);
 
+    // Handle API errors
+    if (error instanceof APIError) {
+      return NextResponse.json(
+        {
+          error: error.userMessage,
+          category: error.category,
+        },
+        { status: error.statusCode || 500 }
+      );
+    }
+
+    // Handle generic errors
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : 'Publishing failed',
+        category: ErrorCategory.UNKNOWN,
       },
       { status: 500 }
     );

@@ -15,64 +15,42 @@ import {
   TranslationResponse,
   TranslationReviewReport,
 } from '@/types';
-
-/**
- * Rate limiting (simple in-memory implementation)
- * In production, use Redis or similar
- */
-const rateLimitMap = new Map<string, number[]>();
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 10;
-
-function checkRateLimit(identifier: string): boolean {
-  const now = Date.now();
-  const requests = rateLimitMap.get(identifier) || [];
-
-  // Remove old requests outside the window
-  const recentRequests = requests.filter((time) => now - time < RATE_LIMIT_WINDOW);
-
-  if (recentRequests.length >= MAX_REQUESTS_PER_WINDOW) {
-    return false;
-  }
-
-  recentRequests.push(now);
-  rateLimitMap.set(identifier, recentRequests);
-
-  return true;
-}
+import { applyRateLimit } from '@/lib/security/rate-limiter';
+import { translationRequestSchema } from '@/lib/validation/schemas';
+import { APIError, ErrorCategory } from '@/lib/api/error-handler';
 
 /**
  * POST /api/translate
  */
 export async function POST(request: NextRequest) {
   try {
-    // Rate limiting
-    const clientIp = request.headers.get('x-forwarded-for') || 'unknown';
-    if (!checkRateLimit(clientIp)) {
-      return NextResponse.json(
-        { error: 'Rate limit exceeded. Please try again later.' },
-        { status: 429 }
-      );
+    // Apply rate limiting (10 requests per minute)
+    const rateLimitResponse = applyRateLimit(request, 'translate');
+    if (rateLimitResponse) {
+      return rateLimitResponse;
     }
 
-    // Parse request body
+    // Parse and validate request
     const body: TranslationRequest = await request.json();
+
+    // Validate with Zod schema
+    const validation = translationRequestSchema.safeParse(body);
+    if (!validation.success) {
+      const errors = validation.error.errors.map((err) => ({
+        field: err.path.join('.'),
+        message: err.message,
+      }));
+
+      return NextResponse.json(
+        {
+          error: 'Validation failed',
+          details: errors,
+        },
+        { status: 400 }
+      );
+    }
+
     const { content, sourceLang, targetLang, domain, context } = body;
-
-    // Validate inputs
-    if (!content || !sourceLang || !targetLang) {
-      return NextResponse.json(
-        { error: 'Missing required fields: content, sourceLang, targetLang' },
-        { status: 400 }
-      );
-    }
-
-    if (content.length > 50000) {
-      return NextResponse.json(
-        { error: 'Content too long. Maximum 50,000 characters.' },
-        { status: 400 }
-      );
-    }
 
     // Step 1: Translate content
     const translatedContent = await translateWithAI(
