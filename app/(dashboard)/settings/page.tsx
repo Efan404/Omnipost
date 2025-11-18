@@ -21,6 +21,19 @@ import { getDatabaseService } from '@/lib/appwrite/database';
 import { ArrowLeft, Check, X, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
+import {
+  AIProvider,
+  AIModel,
+  PROVIDER_INFO,
+  MODEL_INFO,
+} from '@/lib/ai/providers';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -32,6 +45,22 @@ export default function SettingsPage() {
   >({} as any);
   const [validating, setValidating] = useState<Platform | null>(null);
   const [saving, setSaving] = useState<Platform | null>(null);
+
+  // AI Provider preferences
+  const [aiPreferences, setAiPreferences] = useState({
+    contentProvider: AIProvider.OPENAI,
+    contentModel: AIModel.GPT4O_MINI,
+    translationProvider: AIProvider.DEEPSEEK,
+    translationModel: AIModel.DEEPSEEK_CHAT,
+    reviewProvider: AIProvider.ANTHROPIC,
+    reviewModel: AIModel.CLAUDE_SONNET,
+    apiKeys: {
+      [AIProvider.OPENAI]: '',
+      [AIProvider.ANTHROPIC]: '',
+      [AIProvider.DEEPSEEK]: '',
+    },
+  });
+  const [savingAI, setSavingAI] = useState(false);
 
   const availablePlatforms = getAvailablePlatforms();
 
@@ -149,6 +178,44 @@ export default function SettingsPage() {
       });
     } finally {
       setSaving(null);
+    }
+  };
+
+  const handleSaveAIPreferences = async () => {
+    if (!user) return;
+
+    setSavingAI(true);
+
+    try {
+      // Save to localStorage for now (in production, save to Appwrite)
+      localStorage.setItem('aiPreferences', JSON.stringify(aiPreferences));
+
+      toast({
+        title: 'Saved Successfully',
+        description: 'AI provider preferences have been saved',
+      });
+    } catch (error) {
+      console.error('Save failed:', error);
+      toast({
+        title: 'Save Failed',
+        description: 'Failed to save AI preferences',
+        variant: 'destructive',
+      });
+    } finally {
+      setSavingAI(false);
+    }
+  };
+
+  const getModelsForProvider = (provider: AIProvider): AIModel[] => {
+    switch (provider) {
+      case AIProvider.OPENAI:
+        return [AIModel.GPT4O, AIModel.GPT4O_MINI, AIModel.GPT4_TURBO, AIModel.GPT35_TURBO];
+      case AIProvider.ANTHROPIC:
+        return [AIModel.CLAUDE_OPUS, AIModel.CLAUDE_SONNET, AIModel.CLAUDE_HAIKU];
+      case AIProvider.DEEPSEEK:
+        return [AIModel.DEEPSEEK_CHAT, AIModel.DEEPSEEK_CODER];
+      default:
+        return [];
     }
   };
 
@@ -318,18 +385,226 @@ export default function SettingsPage() {
               })}
             </TabsContent>
 
-            <TabsContent value="preferences">
+            <TabsContent value="preferences" className="space-y-6">
+              {/* AI Provider Configuration */}
               <Card>
                 <CardHeader>
-                  <CardTitle>User Preferences</CardTitle>
+                  <CardTitle>AI Provider Settings</CardTitle>
                   <CardDescription>
-                    Configure your default settings
+                    Configure AI providers for content processing and translation
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  <p className="text-sm text-muted-foreground">
-                    Preferences coming soon...
-                  </p>
+                <CardContent className="space-y-6">
+                  {/* Content Processing Provider */}
+                  <div className="space-y-4 pb-4 border-b">
+                    <h3 className="font-semibold text-sm">Content Processing</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>AI Provider</Label>
+                        <Select
+                          value={aiPreferences.contentProvider}
+                          onValueChange={(value) =>
+                            setAiPreferences({
+                              ...aiPreferences,
+                              contentProvider: value as AIProvider,
+                              contentModel: getModelsForProvider(value as AIProvider)[0],
+                            })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.values(AIProvider).map((provider) => (
+                              <SelectItem key={provider} value={provider}>
+                                {PROVIDER_INFO[provider].icon} {PROVIDER_INFO[provider].name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Model</Label>
+                        <Select
+                          value={aiPreferences.contentModel}
+                          onValueChange={(value) =>
+                            setAiPreferences({
+                              ...aiPreferences,
+                              contentModel: value as AIModel,
+                            })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {getModelsForProvider(aiPreferences.contentProvider).map((model) => (
+                              <SelectItem key={model} value={model}>
+                                {MODEL_INFO[model].name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Translation Provider */}
+                  <div className="space-y-4 pb-4 border-b">
+                    <h3 className="font-semibold text-sm">Translation</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>AI Provider</Label>
+                        <Select
+                          value={aiPreferences.translationProvider}
+                          onValueChange={(value) =>
+                            setAiPreferences({
+                              ...aiPreferences,
+                              translationProvider: value as AIProvider,
+                              translationModel: getModelsForProvider(value as AIProvider)[0],
+                            })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.values(AIProvider).map((provider) => (
+                              <SelectItem key={provider} value={provider}>
+                                {PROVIDER_INFO[provider].icon} {PROVIDER_INFO[provider].name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Model</Label>
+                        <Select
+                          value={aiPreferences.translationModel}
+                          onValueChange={(value) =>
+                            setAiPreferences({
+                              ...aiPreferences,
+                              translationModel: value as AIModel,
+                            })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {getModelsForProvider(aiPreferences.translationProvider).map((model) => (
+                              <SelectItem key={model} value={model}>
+                                {MODEL_INFO[model].name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Review Provider */}
+                  <div className="space-y-4 pb-4 border-b">
+                    <h3 className="font-semibold text-sm">Translation Review</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>AI Provider</Label>
+                        <Select
+                          value={aiPreferences.reviewProvider}
+                          onValueChange={(value) =>
+                            setAiPreferences({
+                              ...aiPreferences,
+                              reviewProvider: value as AIProvider,
+                              reviewModel: getModelsForProvider(value as AIProvider)[0],
+                            })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.values(AIProvider).map((provider) => (
+                              <SelectItem key={provider} value={provider}>
+                                {PROVIDER_INFO[provider].icon} {PROVIDER_INFO[provider].name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Model</Label>
+                        <Select
+                          value={aiPreferences.reviewModel}
+                          onValueChange={(value) =>
+                            setAiPreferences({
+                              ...aiPreferences,
+                              reviewModel: value as AIModel,
+                            })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {getModelsForProvider(aiPreferences.reviewProvider).map((model) => (
+                              <SelectItem key={model} value={model}>
+                                {MODEL_INFO[model].name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* API Keys */}
+                  <div className="space-y-4">
+                    <h3 className="font-semibold text-sm">API Keys</h3>
+                    <div className="space-y-3">
+                      {Object.values(AIProvider).map((provider) => (
+                        <div key={provider} className="space-y-2">
+                          <Label htmlFor={`ai-${provider}`}>
+                            {PROVIDER_INFO[provider].icon} {PROVIDER_INFO[provider].name}
+                          </Label>
+                          <Input
+                            id={`ai-${provider}`}
+                            type="password"
+                            placeholder={`Enter your ${PROVIDER_INFO[provider].name} API key`}
+                            value={aiPreferences.apiKeys[provider]}
+                            onChange={(e) =>
+                              setAiPreferences({
+                                ...aiPreferences,
+                                apiKeys: {
+                                  ...aiPreferences.apiKeys,
+                                  [provider]: e.target.value,
+                                },
+                              })
+                            }
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {PROVIDER_INFO[provider].description}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-4">
+                    <Button
+                      onClick={handleSaveAIPreferences}
+                      disabled={savingAI}
+                      className="w-full"
+                    >
+                      {savingAI ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        'Save AI Preferences'
+                      )}
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>

@@ -45,7 +45,7 @@ Compare original and platform-optimized content side-by-side before publishing.
 - **Backend**: Appwrite (Database, Auth, Storage)
 - **Editor**: Tiptap (WYSIWYG markdown editor)
 - **State Management**: Zustand with Immer
-- **AI**: OpenAI GPT-4, Anthropic Claude
+- **AI**: OpenAI GPT-4, Anthropic Claude, DeepSeek (multi-provider support)
 - **Diff Viewer**: react-diff-viewer-continued
 
 ## 🚀 Getting Started
@@ -54,8 +54,10 @@ Compare original and platform-optimized content side-by-side before publishing.
 
 - Node.js 18+ and npm/yarn
 - Appwrite account ([cloud.appwrite.io](https://cloud.appwrite.io) or self-hosted)
-- OpenAI API key (for content optimization and translation)
-- Anthropic API key (optional, for translation review)
+- At least one AI provider API key:
+  - **OpenAI** (GPT-4, GPT-4o, GPT-3.5) - General purpose, recommended
+  - **Anthropic Claude** (Opus, Sonnet, Haiku) - Excellent for quality review
+  - **DeepSeek** (DeepSeek-Chat, DeepSeek-Coder) - Cost-effective alternative
 - Platform API keys (Dev.to, Medium, etc.)
 
 ### Installation
@@ -87,9 +89,12 @@ NEXT_PUBLIC_APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1
 NEXT_PUBLIC_APPWRITE_PROJECT_ID=your_project_id_here
 APPWRITE_API_KEY=your_api_key_here
 
-# AI Services
-OPENAI_API_KEY=your_openai_key_here
-ANTHROPIC_API_KEY=your_anthropic_key_here  # Optional
+# AI Services (at least one required)
+# Translation: DeepSeek > OpenAI > Anthropic
+# Review: Anthropic > OpenAI > DeepSeek
+OPENAI_API_KEY=your_openai_key_here           # Optional
+ANTHROPIC_API_KEY=your_anthropic_key_here     # Optional
+DEEPSEEK_API_KEY=your_deepseek_key_here       # Optional
 
 # Application
 NEXT_PUBLIC_APP_URL=http://localhost:3000
@@ -213,16 +218,18 @@ See [docs/PLATFORM_MARKUP.md](./docs/PLATFORM_MARKUP.md) for complete syntax gui
 
 ### 6. Translate Your Article (Optional)
 
-Translation feature uses dual-AI workflow:
+Translation feature uses dual-AI workflow with automatic provider selection:
 
-1. **Translator AI** (GPT-4) translates content
-2. **Reviewer AI** (Claude) checks quality
+1. **Translator AI** (prefers DeepSeek → OpenAI → Claude) translates content
+2. **Reviewer AI** (prefers Claude → OpenAI → DeepSeek) checks quality
 3. Quality scores calculated:
    - Accuracy (40%)
    - Fluency (30%)
    - Terminology (30%)
 4. Auto-approves if score ≥ 0.9
 5. Otherwise, flags for manual review
+
+**Configure AI Providers**: Go to Settings → Preferences to customize which AI provider and model to use for each task.
 
 ## 🏗️ Project Structure
 
@@ -266,6 +273,12 @@ omnipost/
 │   │   ├── medium.ts             # Medium integration
 │   │   └── index.ts              # Adapter registry
 │   ├── ai/                       # AI services
+│   │   ├── providers/            # AI provider implementations
+│   │   │   ├── base.ts           # Abstract provider class
+│   │   │   ├── openai.ts         # OpenAI provider
+│   │   │   ├── anthropic.ts      # Anthropic Claude provider
+│   │   │   ├── deepseek.ts       # DeepSeek provider
+│   │   │   └── index.ts          # Provider factory
 │   │   └── content-processor.ts  # Content optimization
 │   ├── appwrite/                 # Appwrite integration
 │   │   ├── config.ts             # Client setup
@@ -482,8 +495,9 @@ MIT License - see [LICENSE](LICENSE) file for details
 - [Appwrite](https://appwrite.io) - Backend services
 - [Tiptap](https://tiptap.dev) - Editor framework
 - [shadcn/ui](https://ui.shadcn.com) - UI components
-- [OpenAI](https://openai.com) - AI services
-- [Anthropic](https://anthropic.com) - Claude AI
+- [OpenAI](https://openai.com) - GPT models
+- [Anthropic](https://anthropic.com) - Claude AI models
+- [DeepSeek](https://deepseek.com) - DeepSeek AI models
 
 ## 📧 Support
 

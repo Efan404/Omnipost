@@ -15,6 +15,11 @@ import {
   TranslationResponse,
   TranslationReviewReport,
 } from '@/types';
+import {
+  createAIProvider,
+  AIProvider,
+  BaseAIProvider,
+} from '@/lib/ai/providers';
 
 /**
  * Rate limiting (simple in-memory implementation)
@@ -39,6 +44,64 @@ function checkRateLimit(identifier: string): boolean {
   rateLimitMap.set(identifier, recentRequests);
 
   return true;
+}
+
+/**
+ * Get AI provider for translation
+ * Prefers DeepSeek (cost-effective) > OpenAI > Anthropic
+ */
+function getTranslationProvider(): BaseAIProvider | null {
+  // Try DeepSeek first (cost-effective for translation)
+  if (process.env.DEEPSEEK_API_KEY) {
+    return createAIProvider(AIProvider.DEEPSEEK, {
+      apiKey: process.env.DEEPSEEK_API_KEY,
+    });
+  }
+
+  // Fallback to OpenAI
+  if (process.env.OPENAI_API_KEY) {
+    return createAIProvider(AIProvider.OPENAI, {
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+  }
+
+  // Last fallback to Anthropic
+  if (process.env.ANTHROPIC_API_KEY) {
+    return createAIProvider(AIProvider.ANTHROPIC, {
+      apiKey: process.env.ANTHROPIC_API_KEY,
+    });
+  }
+
+  return null;
+}
+
+/**
+ * Get AI provider for review
+ * Prefers Anthropic (better at analysis) > OpenAI > DeepSeek
+ */
+function getReviewProvider(): BaseAIProvider | null {
+  // Try Anthropic first (better at quality review and analysis)
+  if (process.env.ANTHROPIC_API_KEY) {
+    return createAIProvider(AIProvider.ANTHROPIC, {
+      apiKey: process.env.ANTHROPIC_API_KEY,
+    });
+  }
+
+  // Fallback to OpenAI
+  if (process.env.OPENAI_API_KEY) {
+    return createAIProvider(AIProvider.OPENAI, {
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+  }
+
+  // Last fallback to DeepSeek
+  if (process.env.DEEPSEEK_API_KEY) {
+    return createAIProvider(AIProvider.DEEPSEEK, {
+      apiKey: process.env.DEEPSEEK_API_KEY,
+    });
+  }
+
+  return null;
 }
 
 /**
@@ -127,10 +190,10 @@ async function translateWithAI(
   domain?: string,
   context?: string
 ): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const provider = getTranslationProvider();
 
-  if (!apiKey) {
-    throw new Error('OpenAI API key not configured');
+  if (!provider) {
+    throw new Error('No AI provider configured for translation. Please set OPENAI_API_KEY, ANTHROPIC_API_KEY, or DEEPSEEK_API_KEY.');
   }
 
   const prompt = buildTranslationPrompt(
@@ -141,36 +204,22 @@ async function translateWithAI(
     context
   );
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o',
+  const systemPrompt = 'You are a professional translator specializing in technical content. Translate accurately while preserving markdown formatting, code blocks, and technical terminology.';
+
+  try {
+    const response = await provider.complete({
       messages: [
-        {
-          role: 'system',
-          content: `You are a professional translator specializing in technical content. Translate accurately while preserving markdown formatting, code blocks, and technical terminology.`,
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
       ],
       temperature: 0.3, // Lower temperature for more accurate translation
-      max_tokens: 4000,
-    }),
-  });
+      maxTokens: 4000,
+    });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Translation failed: ${error}`);
+    return response.content.trim();
+  } catch (error) {
+    throw new Error(`Translation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
-
-  const data = await response.json();
-  return data.choices[0].message.content.trim();
 }
 
 /**
@@ -182,11 +231,10 @@ async function reviewTranslation(
   sourceLang: string,
   targetLang: string
 ): Promise<TranslationReviewReport> {
-  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY;
-  const useAnthropic = !!process.env.ANTHROPIC_API_KEY;
+  const provider = getReviewProvider();
 
-  if (!apiKey) {
-    throw new Error('AI API key not configured for review');
+  if (!provider) {
+    throw new Error('No AI provider configured for review. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY.');
   }
 
   const prompt = buildReviewPrompt(
@@ -196,72 +244,23 @@ async function reviewTranslation(
     targetLang
   );
 
-  let reviewText: string;
+  const systemPrompt = 'You are a translation quality reviewer. Analyze translations objectively and provide detailed feedback.';
 
-  if (useAnthropic) {
-    // Use Claude for review (diversity in AI models)
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 2000,
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-      }),
+  try {
+    const response = await provider.complete({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.3,
+      maxTokens: 2000,
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Review failed: ${error}`);
-    }
-
-    const data = await response.json();
-    reviewText = data.content[0].text.trim();
-  } else {
-    // Fallback to OpenAI
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a translation quality reviewer. Analyze translations objectively and provide detailed feedback.',
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature: 0.3,
-        max_tokens: 2000,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Review failed: ${error}`);
-    }
-
-    const data = await response.json();
-    reviewText = data.choices[0].message.content.trim();
+    // Parse review response into structured report
+    return parseReviewResponse(response.content.trim());
+  } catch (error) {
+    throw new Error(`Review failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
-
-  // Parse review response into structured report
-  return parseReviewResponse(reviewText);
 }
 
 /**

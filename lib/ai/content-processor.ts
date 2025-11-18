@@ -2,32 +2,31 @@
  * AI Content Processor
  *
  * Processes content using AI to generate platform-specific variants.
- * Uses OpenAI GPT-4 or Anthropic Claude for intelligent content adaptation.
+ * Supports multiple AI providers: OpenAI, Anthropic Claude, DeepSeek.
  */
 
 import {
   Platform,
   ContentProcessInput,
-  ProcessedContent,
   PlatformVariants,
-  ContentVariant,
   Article,
 } from '@/types';
 import { getPlatformInfo } from '@/lib/adapters';
 import { getPlatformMarkupParser } from '@/lib/parser/platform-markup';
+import {
+  createAIProvider,
+  AIProvider,
+  AIModel,
+  BaseAIProvider,
+} from './providers';
 
 /**
- * AI Provider types
- */
-export type AIProvider = 'openai' | 'anthropic';
-
-/**
- * AI Configuration
+ * AI Configuration for content processing
  */
 interface AIConfig {
   provider: AIProvider;
-  model: string;
-  apiKey: string;
+  model?: string;
+  apiKey?: string;
 }
 
 /**
@@ -37,31 +36,53 @@ interface ProcessingResult {
   variants: PlatformVariants;
   processingTime: number;
   model: string;
+  provider: string;
 }
 
 /**
  * AI Content Processor Class
  */
 export class ContentProcessor {
+  private aiProvider: BaseAIProvider;
   private config: AIConfig;
 
   constructor(config?: Partial<AIConfig>) {
-    const defaultProvider: AIProvider = 'openai';
-    const defaultModel = 'gpt-4o-mini';
+    // Default to OpenAI if not specified
+    const provider = config?.provider || AIProvider.OPENAI;
+
+    // Get API key from environment or config
+    const apiKey = config?.apiKey || this.getProviderApiKey(provider);
+
+    if (!apiKey) {
+      console.warn(`Warning: No API key configured for ${provider}. AI processing may fail.`);
+    }
 
     this.config = {
-      provider: config?.provider || defaultProvider,
-      model: config?.model || defaultModel,
-      apiKey:
-        config?.apiKey ||
-        (defaultProvider === 'openai'
-          ? process.env.OPENAI_API_KEY
-          : process.env.ANTHROPIC_API_KEY) ||
-        '',
+      provider,
+      model: config?.model,
+      apiKey,
     };
 
-    if (!this.config.apiKey) {
-      console.warn('Warning: No AI API key configured. AI processing will fail.');
+    // Create AI provider instance
+    this.aiProvider = createAIProvider(provider, {
+      apiKey: apiKey || '',
+      model: config?.model,
+    });
+  }
+
+  /**
+   * Get API key from environment variables
+   */
+  private getProviderApiKey(provider: AIProvider): string | undefined {
+    switch (provider) {
+      case AIProvider.OPENAI:
+        return process.env.OPENAI_API_KEY;
+      case AIProvider.ANTHROPIC:
+        return process.env.ANTHROPIC_API_KEY;
+      case AIProvider.DEEPSEEK:
+        return process.env.DEEPSEEK_API_KEY;
+      default:
+        return undefined;
     }
   }
 
@@ -102,7 +123,8 @@ export class ContentProcessor {
     return {
       variants: optimizedVariants,
       processingTime,
-      model: this.config.model,
+      model: this.aiProvider.getDefaultModel(),
+      provider: this.aiProvider.getProviderName(),
     };
   }
 
@@ -117,7 +139,8 @@ export class ContentProcessor {
     const platformInfo = getPlatformInfo(platform);
 
     // Build optimization prompt
-    const prompt = this.buildOptimizationPrompt(
+    const systemPrompt = this.buildSystemPrompt();
+    const userPrompt = this.buildOptimizationPrompt(
       content,
       platform,
       platformInfo,
@@ -126,13 +149,28 @@ export class ContentProcessor {
 
     // Call AI API
     try {
-      const optimized = await this.callAI(prompt);
-      return optimized;
+      const response = await this.aiProvider.complete({
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.7,
+        maxTokens: 4000,
+      });
+
+      return response.content.trim();
     } catch (error) {
       console.error(`Failed to optimize for ${platform}:`, error);
       // Fallback to original content if AI fails
       return content;
     }
+  }
+
+  /**
+   * Build system prompt for AI
+   */
+  private buildSystemPrompt(): string {
+    return 'You are a professional content editor and technical writer. You optimize articles for different publishing platforms while maintaining accuracy and value. You understand the nuances of each platform\'s audience and formatting requirements.';
   }
 
   /**
@@ -226,86 +264,6 @@ ${platformGuidelines}
   }
 
   /**
-   * Call AI API (OpenAI or Anthropic)
-   */
-  private async callAI(prompt: string): Promise<string> {
-    if (this.config.provider === 'openai') {
-      return this.callOpenAI(prompt);
-    } else {
-      return this.callAnthropic(prompt);
-    }
-  }
-
-  /**
-   * Call OpenAI API
-   */
-  private async callOpenAI(prompt: string): Promise<string> {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.config.model,
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are a professional content editor and technical writer. You optimize articles for different publishing platforms while maintaining accuracy and value.',
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature: 0.7,
-        max_tokens: 4000,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenAI API error: ${error}`);
-    }
-
-    const data = await response.json();
-    return data.choices[0].message.content.trim();
-  }
-
-  /**
-   * Call Anthropic Claude API
-   */
-  private async callAnthropic(prompt: string): Promise<string> {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.config.apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: this.config.model,
-        max_tokens: 4000,
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Anthropic API error: ${error}`);
-    }
-
-    const data = await response.json();
-    return data.content[0].text.trim();
-  }
-
-  /**
    * Simple content optimization without AI (fallback)
    * Uses platform markup parser only
    */
@@ -316,6 +274,16 @@ ${platformGuidelines}
     const parser = getPlatformMarkupParser();
     return parser.generateVariants(content, platforms);
   }
+
+  /**
+   * Get current AI provider info
+   */
+  getProviderInfo(): { provider: string; model: string } {
+    return {
+      provider: this.aiProvider.getProviderName(),
+      model: this.aiProvider.getDefaultModel(),
+    };
+  }
 }
 
 /**
@@ -324,20 +292,22 @@ ${platformGuidelines}
 let processorInstance: ContentProcessor | null = null;
 
 export function getContentProcessor(config?: Partial<AIConfig>): ContentProcessor {
-  if (!processorInstance) {
+  if (!processorInstance || config) {
     processorInstance = new ContentProcessor(config);
   }
   return processorInstance;
 }
 
 /**
- * Convenience function to process content
+ * Convenience function to process content with specific provider
  */
 export async function processArticleContent(
   article: Article,
-  platforms: Platform[]
+  platforms: Platform[],
+  provider?: AIProvider,
+  model?: string
 ): Promise<ProcessingResult> {
-  const processor = getContentProcessor();
+  const processor = getContentProcessor({ provider, model });
 
   return processor.processContent({
     originalMarkdown: article.contentOriginal,

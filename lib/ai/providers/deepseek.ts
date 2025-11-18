@@ -1,0 +1,133 @@
+/**
+ * DeepSeek Provider Implementation
+ *
+ * Integrates with DeepSeek's AI models for content generation and translation.
+ * DeepSeek API is compatible with OpenAI's API format.
+ */
+
+import {
+  BaseAIProvider,
+  AIProvider,
+  AIModel,
+  AICompletionRequest,
+  AICompletionResponse,
+  AIProviderConfig,
+} from './base';
+
+interface DeepSeekMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+interface DeepSeekCompletionRequest {
+  model: string;
+  messages: DeepSeekMessage[];
+  temperature?: number;
+  max_tokens?: number;
+  stream?: boolean;
+}
+
+interface DeepSeekCompletionResponse {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    message: {
+      role: string;
+      content: string;
+    };
+    finish_reason: string;
+  }>;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
+
+/**
+ * DeepSeek Provider
+ */
+export class DeepSeekProvider extends BaseAIProvider {
+  readonly provider = AIProvider.DEEPSEEK;
+  readonly defaultModel = AIModel.DEEPSEEK_CHAT;
+  readonly supportedModels = [
+    AIModel.DEEPSEEK_CHAT,
+    AIModel.DEEPSEEK_CODER,
+  ];
+
+  private readonly baseURL: string;
+
+  constructor(config: AIProviderConfig) {
+    super(config);
+    this.baseURL = config.baseURL || 'https://api.deepseek.com/v1';
+  }
+
+  /**
+   * Generate completion using DeepSeek API
+   */
+  async complete(request: AICompletionRequest): Promise<AICompletionResponse> {
+    const model = request.model || this.getDefaultModel();
+
+    const payload: DeepSeekCompletionRequest = {
+      model,
+      messages: request.messages,
+      temperature: request.temperature ?? 0.7,
+      max_tokens: request.maxTokens ?? 4000,
+      stream: false,
+    };
+
+    const response = await fetch(`${this.baseURL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.config.apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`DeepSeek API error: ${error}`);
+    }
+
+    const data: DeepSeekCompletionResponse = await response.json();
+
+    return {
+      content: data.choices[0].message.content,
+      model: data.model,
+      usage: {
+        promptTokens: data.usage.prompt_tokens,
+        completionTokens: data.usage.completion_tokens,
+        totalTokens: data.usage.total_tokens,
+      },
+    };
+  }
+
+  /**
+   * Validate DeepSeek API key
+   */
+  async validateApiKey(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.baseURL}/models`, {
+        headers: {
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+      });
+
+      return response.ok;
+    } catch (error) {
+      console.error('DeepSeek API key validation failed:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get provider name
+   */
+  getProviderName(): string {
+    return 'DeepSeek';
+  }
+}
